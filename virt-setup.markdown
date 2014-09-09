@@ -1,6 +1,6 @@
 # Current Virtualization Setup
 * * *
-## Debian OS
+## Debian Jessie/Testing
 ###### (as of 2014-03-06)
 * * *
 ### Links
@@ -27,46 +27,72 @@ Due to the issues of booting with grub2 and lvm, I recommend only having the hom
 
 * ~50GB root partition
 * Rest in a lvm volume group
+
 ##### Network Bridge
 * In `/etc/network/interfaces` remove eth0 (and/or other hardware ports) and add
+
         auto br0
         iface br0 inet dhcp
           bridge_ports eth0
           bridge_stp off
           bridge_maxwait 0
           bridge_fd 0
+
 * Add any other interface to `bridge_ports` if desired
 * __TODO__: NAT
 
+###### Alternative: Macvtap
+
+* __TODO__: Add more information.  Seemed to work last tried (require e1000 interface if using freebsd/pfsense guest).
+
 ##### Linux Containers
 * __OPTIONAL__: Add user to lxc group (probably can be bypassed via libvirt)
+
         usermod -a -G lxc <user>
+
 * Add to `/etc/fstab`
+
         cgroup    /sys/fs/cgroup    cgroup    defaults    0    0
+
 * Mount or reboot
+
         mount /sys/fs/cgroup
+
 * The Debian wiki says _optional_ but virt-manager complains if not set
   * In `/etc/default/grub`
     * Modify `GRUB_CMDLINE_LINUX=""`
+
             GRUB_CMDLINE_LINUX="cgroup_enable=memory swapaccount=1"
+
     * Run
+
             update-grub2
+
     * Reboot
 * To verify kernel can run LXC, run
+
         lxc-checkconfig
 
 ##### KVM
 * __OPTIONAL__: Add user to kvm or qemu group
+
         usermod -a -G kvm <user>
+
 * Check if computer can run kvm
+
         egrep '(vmx|svm)' --color=always /proc/cpuinfo
+
 * Check if needs to enabled in BIOS
 
 ##### libvirt
 * Add user to libvirt group (or `unix_sock_group` in `libvirtd.conf`)
+
         usermod -a -G libvirt <user>
+
 * To allow remote connection (virt-manager), in `/etc/libvirt/libvirtd.conf` add/uncomment
+
         listen_tcp = 1
+
 * __TODO__: Authentication based connection
 
 * * *
@@ -90,11 +116,17 @@ Due to the issues of booting with grub2 and lvm, I recommend only having the hom
 ### Usage
 ##### Qemu (OSX)
 * Install qemu
+
         brew install qemu
+
 * Create a image
         qemu-img create <image>.qcow <size>
 * Start the vm with the installation ISO
+
         qemu-system-x86_64 -cdrom <iso image> -boot order=d -smp <cpu count> -m <ram size> -vga std <image>.qcow
+
 * Start the vm without the installation ISO with SDL window
+
         qemu-system-x86_64 -boot order=c -smp <cpu count> -m <ram size> -vga std <image>/qcow
+
 __TODO__
