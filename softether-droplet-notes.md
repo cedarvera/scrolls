@@ -1,53 +1,161 @@
 ### Initial Debian Setup
+
 * <https://www.digitalocean.com/community/tutorials/initial-server-setup-with-debian-8>
 
 ### ufw Firewall
+
 Problems getting it to work with everything on complicated setups.
+
 * <https://www.digitalocean.com/community/tutorials/how-to-setup-a-firewall-with-ufw-on-an-ubuntu-and-debian-cloud-server>
 
-### TODO Use iptable
+Ports to allow:
+
+* **HTTP**: TCP 80
+* **HTTPS**: TCP 443
+* **SoftEther VPN** and **OpenVPN**: TCP 443, TCP 992, TCP 5555
+* **L2TP/IPSEC**, **L2TPv3** and **EtherIP**: UDP 500, UDP 4500
+* **dnsmasq**: 53, 67 (for local bridge)
+
+Don't forget to enable ssh port.
+
+    ufw allow in on eth0 to any port 22
+
+Annoyingly it is ordered by when it is added instead of by port number so for a quick copy-paste
+
+    ufw allow in on eth0 to any port 22
+    ufw allow in on {tap interface} to any port 53
+    ufw allow in on {tap interface} to any port 67
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw allow 500/udp
+    ufw allow 992/tcp
+    ufw allow 1194/udp
+    ufw allow 4500/udp
+    ufw allow 5555/tcp
+
+**TODO** Use iptable
 
 ### SoftEther
+
 * <https://www.digitalocean.com/community/tutorials/how-to-setup-a-multi-protocol-vpn-server-using-softether>
 * <https://www.softether.org/4-docs/1-manual/A._Examples_of_Building_VPN_Networks/10.6_Build_a_LAN-to-LAN_VPN_%28Using_L3_IP_Routing%29>
 
 #### Other how-tos
+
 * <http://bunic.si/2015/04/l3-bridge-with-two-raspberry-pi-2/>
 * <http://blog.lincoln.hk/blog/2013/03/19/softether-on-vps/>
 * <http://blog.lincoln.hk/blog/2013/05/17/softether-on-vps-using-local-bridge/>
 
-### For local bridge with ufw
+### For local bridge with ufw and dnsmasq
+
+#### Setup local bridge
+
+In `vpncmd`:
+
+    BridgeCreate [hubname] /DEVICE:soft /TAP:yes
+
+Name of the tap was inconsistent with the one created in vpncmd so verify with ip addr or ifconfig (The name comes out as tap_soft).
+
+#### The resulting sysvinit file
+
+Create file `vpnserver` in `/etc/init.d/`
+
+    #!/bin/sh
+    # chkconfig: 2345 99 01
+    # description: SoftEther VPN Server
+    DAEMON=/usr/local/vpnserver/vpnserver
+    LOCK=/var/lock/subsys/vpnserver
+    TAP_ADDR=192.168.50.1
+    
+    test -x $DAEMON || exit 0
+    case "$1" in
+    start)
+    $DAEMON start
+    touch $LOCK
+    sleep 1
+    /sbin/ifconfig {tap interface} $TAP_ADDR
+    ;;
+    stop)
+    $DAEMON stop
+    rm $LOCK
+    ;;
+    restart)
+    $DAEMON stop
+    sleep 3
+    $DAEMON start
+    sleep 1
+    /sbin/ifconfig {tap interface} $TAP_ADDR
+    ;;
+    *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    esac
+    exit 0
+
+#### Setup dnsmasq
+In `/etc/dnsmasq.conf` add:
+
+    interface={tap interface}
+    dhcp-range={tap interface},192.168.50.50,192.168.50.150,12h
+    dhcp-option={tap interface},3,192.168.50.1
+
+For static routing for bridge to bridge:
+
+    dhcp-option=121,{IP_RANGE_01},192.168.50.254,{IP_RANGE_02},192.168.50.254
+
+#### Setup ufw
+
 In `/etc/default/ufw` change parameter `DEFAULT_FOWARD_POLICY`:
 
     DEFAULT_FORWARD_POLICY="ACCEPT"
 
 In `/etc/ufw/before.rules` add before the filter rules:
 
+Replace {LOCAL\_IP\_RANGE} with the bridge IP range such as 192.168.50.0/24
+
     # nat Table rules
     *nat
     :POSTROUTING ACCEPT [0:0]
-    # Forward traffic
-    -A POSTROUTING -s 192.168.60.0/24 -j SNAT --to-source 104.236.166.43
-    # don't delete the 'COMMIT' line or these rules won't be processed
+    # Forward traffic from Softether through eth0
+    -A POSTROUTING -s {LOCAL_IP_RANGE} -o eth0 -j MASQUERADE
+    # tell ufw to process the lines
     COMMIT
 
-In `vpncmd`:
+Allow the ports to dnsmasq
 
-    BridgeCreate access /Device:softtap /TAP:yes
+    ufw allow in on {tap interface} to any port 53
+    ufw allow in on {tap interface} to any port 67
 
-Name of the tap was inconsistent with the one created in vpncmd so verify with ip addr or ifconfig
+
+### Setup ipv4 forwarding
+
+Add/uncomment in file /etc/sysctl.conf
+
+    net.ipv4.ip_forward = 1
+
+Apply
+
+    sysctl --system
+
+### Restart the services
+
+    /etc/init.d/vpnserver restart
+    /etc/init.d/dnsmasq restart
+    ufw disable && ufw enable
 
 ## Create a layer 3 site-to-site vpn
 
-### Create a hub for each network
+### Softether Server
+
+#### Create a hub for each network
 In `vpncmd`:
 
     HubCreate [hubname0]
     HubCreate [hubname1]
 
-**NOTE:** We don't need to setup SecureNat for these hubs as the networks already have their own dhcp servers.
+**NOTE:** We don't need to setup SecureNat or local bridge for these hubs as the networks already have their own dhcp servers.
 
-### Create layer 3 switch
+#### Create layer 3 switch
 Uses router commands in vpncmd:
 
     RouterAdd       - Define New Virtual Layer 3 Switch
@@ -79,7 +187,8 @@ Start the switch:
     RouterStart [name]
 
 ### Bridge to the SoftEther Server
-After installing the vpnbridge software and starting `vpncmd`:
+
+This is for each site.  After installing the vpnbridge software and starting `vpncmd`:
 
     Hub Bridge
     
@@ -185,7 +294,7 @@ If settings are changed then restart the cascade connection by:
     CascadeOffline [name]
     CascadeOnline [name]
     
-### Setup static routing on the local routers
+#### Setup static routing on the local routers
 
 Remember to add static routing so that packets that are bound for other subnets go to the IP of the switch.  In addition make sure the IP of the switch would not be auto-assigned to another device.
 
